@@ -1,0 +1,82 @@
+From 34be0f00bd40887744321a9a153b690e9efe98cd Mon Sep 17 00:00:00 2001
+From: Googler <wyv@google.com>
+Date: Tue, 7 Jan 2025 12:55:05 -0800
+Subject: [PATCH] Partially fix the bootstrap build
+
+In https://github.com/bazelbuild/bazel/issues/24747, users reported errors during bootstrapping about `function_transition_allowlist` missing. This is likely because the version of rules_java used by Bazel itself started using a Starlark rule with a Starlark transition somewhere between Bazel 7 and 8. The bootstrap script never properly set up the `tools/allowlists/function_transition_allowlist` package, so we do that in this CL.
+
+Similarly, we never properly switched to Java 21 in the script; this CL updates that.
+
+It's still a mystery why our bootstrap tests never failed on CI. The only explanation I can think of is that our CI environment somehow detects local JDKs different, resulting in a code path that does _not_ require the `function_transition_allowlist` target to exist. More investigation is needed here.
+
+PiperOrigin-RevId: 713011628
+Change-Id: Ic812d9f1baca405157d3748e61c1d54642c7a322
+
+!WOLFI NOTE!: We have dropped a hunk from this diff as the `src/test`
+file isn't shipped in the tarball.
+---
+ scripts/bootstrap/bootstrap.sh                        | 10 +++++++---
+ scripts/bootstrap/compile.sh                          |  7 +++++++
+ src/test/shell/bazel/bazel_bootstrap_distfile_test.sh |  7 +------
+ 3 files changed, 15 insertions(+), 9 deletions(-)
+
+diff --git a/scripts/bootstrap/bootstrap.sh b/scripts/bootstrap/bootstrap.sh
+index d789d58cfe8f51..932153b5720ca3 100755
+--- a/scripts/bootstrap/bootstrap.sh
++++ b/scripts/bootstrap/bootstrap.sh
+@@ -29,7 +29,7 @@ if [ -n "${EMBED_LABEL}" ]; then
+     EMBED_LABEL_ARG=(--stamp --embed_label "${EMBED_LABEL}")
+ fi
+ 
+-: ${JAVA_VERSION:="11"}
++: ${JAVA_VERSION:="21"}
+ 
+ # TODO: remove `--repo_env=BAZEL_HTTP_RULES_URLS_AS_DEFAULT_CANONICAL_ID=0` once all dependencies are
+ #  mirrored. See https://github.com/bazelbuild/bazel/pull/19549 for more context.
+@@ -46,6 +46,10 @@ _BAZEL_ARGS="--spawn_strategy=standalone \
+       --check_direct_dependencies=error \
+       --lockfile_mode=update \
+       --override_repository=$(cat derived/maven/MAVEN_CANONICAL_REPO_NAME)=derived/maven \
++      --java_runtime_version=${JAVA_VERSION} \
++      --java_language_version=${JAVA_VERSION} \
++      --tool_java_runtime_version=${JAVA_VERSION} \
++      --tool_java_language_version=${JAVA_VERSION} \
+       ${DIST_BOOTSTRAP_ARGS:-} \
+       ${EXTRA_BAZEL_ARGS:-}"
+ 
+@@ -57,7 +61,7 @@ if [ -z "${BAZEL-}" ]; then
+     shift
+     run_bazel_jar $command \
+         ${_BAZEL_ARGS} --verbose_failures \
+-        --javacopt="-g -source ${JAVA_VERSION} -target ${JAVA_VERSION}" "${@}"
++        --javacopt="-g" "${@}"
+   }
+ else
+   function _run_bootstrapping_bazel() {
+@@ -65,7 +69,7 @@ else
+     shift
+     ${BAZEL} --bazelrc=${BAZELRC} ${BAZEL_DIR_STARTUP_OPTIONS} $command \
+         ${_BAZEL_ARGS} --verbose_failures \
+-        --javacopt="-g -source ${JAVA_VERSION} -target ${JAVA_VERSION}" "${@}"
++        --javacopt="-g" "${@}"
+   }
+ fi
+ 
+diff --git a/scripts/bootstrap/compile.sh b/scripts/bootstrap/compile.sh
+index 776c02b8876429..9616ba7a69e065 100755
+--- a/scripts/bootstrap/compile.sh
++++ b/scripts/bootstrap/compile.sh
+@@ -264,6 +264,13 @@ EOF
+ 
+   link_dir ${PWD}/third_party ${BAZEL_TOOLS_REPO}/third_party
+ 
++  # Set up the function_transition_allowlist target, which needs to exist for
++  # Starlark rules that use Starlark transitions.
++  mkdir -p "${BAZEL_TOOLS_REPO}/tools/allowlists/function_transition_allowlist"
++  link_file "${PWD}/tools/allowlists/function_transition_allowlist/BUILD.tools" \
++      "${BAZEL_TOOLS_REPO}/tools/allowlists/function_transition_allowlist/BUILD"
++  link_children "${PWD}" tools/allowlists "${BAZEL_TOOLS_REPO}"
++
+   # Create @bazel_tools//tools/cpp/runfiles
+   mkdir -p ${BAZEL_TOOLS_REPO}/tools/cpp/runfiles
+   link_file "${PWD}/tools/cpp/runfiles/runfiles_src.h" \
